@@ -1,0 +1,231 @@
+//@version=6
+indicator("MoneyLine Weekly + Daily Flips", overlay=true, max_labels_count=500)
+
+// Independent Supertrend implementation using TradingView's built-in calculation.
+// Weekly calculations on standard time-based charts; no proprietary Bullmania equivalence claimed.
+atrLength = input.int(10, "ATR length", minval=1)
+factor = input.float(2.5, "ATR factor", minval=0.1, step=0.1)
+twoBars = input.bool(false, "Require 2 consecutive confirmed bars")
+labelFontSize = input.int(7, "Bull / bear font size", minval=5, maxval=16)
+showDaily = input.bool(true, "Show daily flip flags")
+showMonthly = input.bool(false, "Show confirmed monthly Supertrend")
+showLabels = input.bool(true, "Show weekly flip markers")
+showBackground = input.bool(false, "Shade market state")
+showDashboard = input.bool(false, "Show dashboard")
+showDots = input.bool(true, "Mark exact flip price")
+showOpenWeek = input.bool(true, "Show a note when a flip is developing")
+showWatch = input.bool(true, "Show yellow buy watch", group="Momentum watch")
+rsiLimit = input.float(35, "RSI at or below", minval=0, maxval=100, group="Momentum watch")
+
+showRecovery = input.bool(false, "Show four-week bounce marker", group="Momentum watch")
+
+detailedAlerts = input.string("Trend flips", "Detailed alerts", options=["Trend flips", "All weekly events"], group="Alerts")
+
+isWeekly = timeframe.isweekly and timeframe.multiplier == 1
+if not chart.is_standard or not (isWeekly or timeframe.isintraday or (timeframe.isdaily and timeframe.multiplier == 1))
+    runtime.error("Use standard intraday, 1D or 1W candles.")
+
+f_monthly() =>
+    [level, side] = ta.supertrend(factor, atrLength)
+    [level[1], side[1]]
+
+type Week
+    int endTime
+    float price
+    float st
+    int raw
+    int accepted
+    int pending
+    float monthLine
+    int monthSide
+    float rsi
+    float macd
+    bool watch
+    bool recovery
+
+// Evaluated on weekly candles, including when the host chart is intraday.
+f_week() =>
+    [level, side] = ta.supertrend(factor, atrLength)
+    [monthLevel, monthSide] = request.security(syminfo.tickerid, "1M", f_monthly(), lookahead=barmerge.lookahead_on)
+    int raw = int(side)
+    var int accepted = na
+    if not na(level) and (na(accepted) or not twoBars or raw == raw[1])
+        accepted := raw
+    float rsi = ta.rsi(close, 14)
+    [macd, _, _] = ta.macd(close, 12, 26, 9)
+    bool weak = rsi <= rsiLimit and macd < 0
+    bool watch = weak and not weak[1] and not na(rsi[1]) and not na(macd[1])
+    var int watchBar = na
+    int age = bar_index - watchBar
+    bool recovery = age >= 1 and age <= 4 and close > high[1]
+    if recovery or age >= 4
+        watchBar := na
+    if watch
+        watchBar := bar_index
+    Week.new(time_close, close, level, raw, accepted, raw != accepted ? 1 : 0, monthLevel, int(monthSide), rsi, macd, watch, recovery)
+
+f_previousWeek() =>
+    Week w = f_week()
+    w[1]
+
+Week live = request.security(syminfo.tickerid, "1W", f_week(), lookahead=barmerge.lookahead_off)
+Week prior = request.security(syminfo.tickerid, "1W", f_previousWeek(), lookahead=barmerge.lookahead_on)
+// An aligned final bar can deliver immediately. If that bar is missing,
+// the next week supplies the finished snapshot (also on shortened sessions).
+bool alignedClose = not na(live) and barstate.isconfirmed and time_close == live.endTime
+Week available = alignedClose ? live : prior
+var Week closed = na
+bool fresh = false
+bool initialized = not na(closed)
+int previousDirection = initialized ? closed.accepted : na
+if not na(available) and not na(available.st)
+    fresh := na(closed) or available.endTime > closed.endTime
+    if fresh
+        closed := available
+
+int acceptedDirection = na(closed) ? na : closed.accepted
+int pendingCount = na(closed) ? 0 : closed.pending
+float closedLine = na(closed) ? na : closed.st
+float closedPrice = na(closed) ? na : closed.price
+float closedMonthlyLine = na(closed) ? na : closed.monthLine
+int closedMonthlyDirection = na(closed) ? na : closed.monthSide
+[monthlyLine, unusedSide] = request.security(syminfo.tickerid, "1M", f_monthly(), lookahead=barmerge.lookahead_on)
+int marketState = na(closedMonthlyLine) ? na : acceptedDirection < 0 ? (closedMonthlyDirection < 0 ? 1 : 2) : (closedMonthlyDirection < 0 ? 3 : 4)
+bool stateChanged = fresh and not na(marketState[1]) and marketState != marketState[1]
+bool strongBullEntry = stateChanged and marketState == 1
+bool strongBearEntry = stateChanged and marketState == 4
+bool bullFlip = fresh and previousDirection > 0 and acceptedDirection < 0
+bool bearFlip = fresh and previousDirection < 0 and acceptedDirection > 0
+bool watchStart = fresh and initialized and closed.watch
+bool recoveryStart = fresh and initialized and closed.recovery
+// The exchange close can be midnight at the start of the next calendar day.
+int lastInstant = na(closed) ? na : closed.endTime - 1
+int visibleAt = alignedClose ? time_close : time
+f_time(int t) =>
+    str.format_time(t, "yyyy-MM-dd HH:mm", syminfo.timezone)
+string stamp = ""
+if fresh
+    stamp := "Week ended " + str.format_time(lastInstant, "yyyy-MM-dd", syminfo.timezone) + " | confirmed close " + str.tostring(closedPrice, format.mintick) + "\nVisible on this chart " + f_time(visibleAt) + " " + syminfo.timezone
+if showWatch and watchStart
+    string details = "Potential buy watch at " + str.tostring(closedPrice, format.mintick) + "\nWeekly RSI " + str.tostring(closed.rsi, "#.0") + " | MACD line " + str.tostring(closed.macd, "#.####")
+    label.new(bar_index, closedPrice, "watch", style=label.style_label_left, color=color.yellow, textcolor=color.black, size=labelFontSize, tooltip=details + "\n" + stamp)
+if showRecovery and recoveryStart
+    label.new(bar_index, closedPrice, "bounce", style=label.style_label_left, color=color.new(color.teal, 55), textcolor=color.white, size=labelFontSize, tooltip="First weekly close above the prior high within four weeks of watch\n" + stamp)
+
+color stateColor = na(marketState) ? color.gray : marketState == 1 ? color.lime : marketState == 2 ? color.teal : marketState == 3 ? color.orange : color.fuchsia
+string stateText = na(marketState) ? "Warming up" : marketState == 1 ? "Strong Bullish" : marketState == 2 ? "Bullish / Caution" : marketState == 3 ? "Bearish / Recovery" : "Strong Bearish"
+bool pending = pendingCount > 0
+// During confirmation the raw line already changed sides. Render amber to avoid
+// implying it is still support/resistance for the accepted direction.
+plot(acceptedDirection < 0 and not pending ? closedLine : na, "Confirmed bullish line", color.lime, 3, plot.style_linebr)
+plot(acceptedDirection > 0 and not pending ? closedLine : na, "Confirmed bearish line", color.fuchsia, 3, plot.style_linebr)
+plot(pending ? closedLine : na, "Pending raw Supertrend", color.orange, 3, plot.style_linebr)
+plot(showMonthly ? monthlyLine : na, "Last completed monthly Supertrend", color.new(color.blue, 25), 2, plot.style_stepline)
+plot(showDots and (bullFlip or bearFlip) ? closedPrice : na, "Confirmed flip price", bullFlip ? color.lime : color.fuchsia, 3, plot.style_circles)
+// A developing move can disappear before Friday's or Sunday's close.
+var table weekNote = table.new(position.bottom_right, 1, 1)
+if barstate.islast
+    bool developing = barstate.isrealtime and not na(live) and live.endTime > timenow and not na(acceptedDirection) and live.raw != acceptedDirection
+    if showOpenWeek and developing
+        table.cell(weekNote, 0, 0, "Waiting for weekly close", text_color=chart.fg_color, text_size=size.small)
+    else
+        table.clear(weekNote, 0, 0)
+if showLabels and bullFlip
+    label.new(bar_index, closedPrice, "bull", yloc=yloc.price, style=label.style_label_upper_right, color=color.new(color.green, 25), textcolor=color.white, size=labelFontSize, text_formatting=text.format_none, tooltip="Bullish weekly flip\n" + stamp)
+if showLabels and bearFlip
+    label.new(bar_index, closedPrice, "bear", yloc=yloc.price, style=label.style_label_lower_right, color=color.new(color.fuchsia, 25), textcolor=color.white, size=labelFontSize, text_formatting=text.format_none, tooltip="Bearish weekly flip\n" + stamp)
+bgcolor(showBackground ? color.new(stateColor, 92) : na)
+
+f_price(float value) =>
+    na(value) ? "n/a" : str.tostring(value, format.mintick)
+float distance = not na(closedLine) and closedLine != 0 ? 100 * (closedPrice - closedLine) / math.abs(closedLine) : na
+string distanceText = na(distance) ? "n/a" : str.tostring(distance, "+#.##;-#.##") + "%"
+var table dashboard = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 15), border_width=1)
+if barstate.islast and showDashboard
+    table.cell(dashboard, 0, 0, "MoneyLine v2", text_color=color.white)
+    table.cell(dashboard, 1, 0, "1W | ATR " + str.tostring(atrLength) + " x " + str.tostring(factor), text_color=color.white)
+    table.cell(dashboard, 0, 1, "Market state", text_color=color.white)
+    table.cell(dashboard, 1, 1, stateText, text_color=stateColor)
+    table.cell(dashboard, 0, 2, "Accepted weekly", text_color=color.white)
+    table.cell(dashboard, 1, 2, na(acceptedDirection) ? "n/a" : acceptedDirection < 0 ? "Bullish" : "Bearish", text_color=color.white)
+    table.cell(dashboard, 0, 3, "Monthly (closed)", text_color=color.white)
+    table.cell(dashboard, 1, 3, na(closedMonthlyLine) ? "Warming up" : closedMonthlyDirection < 0 ? "Bullish" : "Bearish", text_color=color.white)
+    table.cell(dashboard, 0, 4, "Raw ST reference*", text_color=color.white)
+    table.cell(dashboard, 1, 4, f_price(closedLine), text_color=color.white)
+    table.cell(dashboard, 0, 5, "Close vs reference", text_color=color.white)
+    table.cell(dashboard, 1, 5, distanceText, text_color=color.white)
+    table.cell(dashboard, 0, 6, "Monthly reference", text_color=color.white)
+    table.cell(dashboard, 1, 6, f_price(closedMonthlyLine), text_color=color.white)
+    table.cell(dashboard, 0, 7, "Confirmation", text_color=color.white)
+    table.cell(dashboard, 1, 7, pending ? "Pending " + str.tostring(pendingCount) + "/2" : twoBars ? "2 closed bars" : "1 closed bar", text_color=pending ? color.orange : color.white)
+    table.cell(dashboard, 0, 8, "Weekly snapshot", text_color=color.white)
+    table.cell(dashboard, 1, 8, fresh ? "Just closed" : "Last closed week", text_color=color.white)
+    table.cell(dashboard, 0, 9, "*Threshold moves", text_color=color.silver)
+    table.cell(dashboard, 1, 9, "Not a fixed next flip price", text_color=color.silver)
+
+plot(closedPrice, "Weekly signal close", display=display.none)
+// Numeric fields keep named conditions useful in TradingView's static messages.
+int weekDate = na(lastInstant) ? na : year(lastInstant) * 10000 + month(lastInstant) * 100 + dayofmonth(lastInstant)
+plot(weekDate, "Week YYYYMMDD", display=display.none, precision=0)
+plot(acceptedDirection < 0 ? 1 : -1, "Trend sign", display=display.none, precision=0)
+plot(marketState, "State code", display=display.none, precision=0)
+const string fields = " | week {{plot(\"Week YYYYMMDD\")}} | weekly close {{plot(\"Weekly signal close\")}}"
+alertcondition(recoveryStart, "Weekly Watch Bounce", "{{ticker}} Weekly BOUNCE" + fields)
+alertcondition(bullFlip, "Weekly Bullish Flip", "{{ticker}} Weekly BULL" + fields)
+alertcondition(bearFlip, "Weekly Bearish Flip", "{{ticker}} Weekly BEAR" + fields)
+alertcondition(watchStart, "Potential Buy Watch", "{{ticker}} Weekly WATCH" + fields)
+alertcondition(bullFlip or bearFlip, "Any Weekly Flip", "{{ticker}} Weekly flip {{plot(\"Trend sign\")}} (+1 bull, -1 bear)" + fields)
+alertcondition(stateChanged, "Market State Change", "{{ticker}} Weekly state {{plot(\"State code\")}} (1 strong bull, 2 caution, 3 bearish/recovery, 4 strong bear)" + fields)
+alertcondition(strongBullEntry, "Entered Strong Bullish", "{{ticker}} Weekly STRONG BULLISH" + fields)
+alertcondition(strongBearEntry, "Entered Strong Bearish", "{{ticker}} Weekly STRONG BEARISH" + fields)
+
+// Combine simultaneous events into one notification on the first eligible update.
+string events = bullFlip ? " BULL" : bearFlip ? " BEAR" : ""
+if detailedAlerts == "All weekly events"
+    events += watchStart ? " WATCH" : ""
+    events += recoveryStart ? " BOUNCE" : ""
+    events += stateChanged ? " | " + stateText : ""
+if fresh and events != ""
+    alert(syminfo.tickerid + " | Weekly" + events + " | " + stamp, alert.freq_once_per_bar)
+
+// Daily reversals always use one completed daily candle.
+f_dailyFlip() =>
+    [band, side] = ta.supertrend(factor, atrLength)
+    not na(band[1]) and side != side[1] ? (side < 0 ? 1 : -1) : 0
+
+f_dailySnapshot(int offset) =>
+    int flip = f_dailyFlip()
+    [time_close[offset], close[offset], flip[offset]]
+
+f_dailyMarker(int flip, int ended, float price) =>
+    bool bull = flip > 0
+    string name = bull ? "D bull" : "D bear"
+    string tip = name + " · daily close " + str.tostring(price, format.mintick) + "\n" + str.format_time(ended, "yyyy-MM-dd HH:mm", syminfo.timezone) + " " + syminfo.timezone
+    label.new(bar_index, price, name, yloc=yloc.price, style=bull ? label.style_label_upper_left : label.style_label_lower_left, color=color.new(bull ? color.teal : color.maroon, 25), textcolor=color.white, size=labelFontSize, tooltip=tip)
+
+if showDaily
+    if isWeekly
+        // Rebuild this week's completed daily labels on every tick after rollback.
+        [ends, prices, flips] = request.security_lower_tf(syminfo.tickerid, "1D", f_dailySnapshot(0))
+        for [i, flip] in flips
+            int ended = ends.get(i)
+            if flip != 0 and (barstate.ishistory or ended <= timenow)
+                f_dailyMarker(flip, ended, prices.get(i))
+    else if timeframe.isdaily
+        int flip = f_dailyFlip()
+        if barstate.isconfirmed and flip != 0
+            f_dailyMarker(flip, time_close, close)
+    else
+        [currentEnd, currentPrice, currentFlip] = request.security(syminfo.tickerid, "1D", f_dailySnapshot(0), lookahead=barmerge.lookahead_off)
+        [priorEnd, priorPrice, priorFlip] = request.security(syminfo.tickerid, "1D", f_dailySnapshot(1), lookahead=barmerge.lookahead_on)
+        bool aligned = barstate.isconfirmed and time_close == currentEnd
+        var int lastDay = na
+        // Deliver a missing final intraday bar's signal on the next session.
+        if not na(priorEnd) and (na(lastDay) or priorEnd > lastDay)
+            if not na(lastDay) and priorFlip != 0
+                f_dailyMarker(priorFlip, priorEnd, priorPrice)
+            lastDay := priorEnd
+        if aligned and (na(lastDay) or currentEnd > lastDay)
+            if currentFlip != 0
+                f_dailyMarker(currentFlip, currentEnd, currentPrice)
+            lastDay := currentEnd
