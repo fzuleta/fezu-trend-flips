@@ -229,3 +229,134 @@ if showDaily
             if currentFlip != 0
                 f_dailyMarker(currentFlip, currentEnd, currentPrice)
             lastDay := currentEnd
+
+// Intraday momentum after an unusually deep selloff.
+const string burstGroup = "Intraday reversal watch"
+showBurst = input.bool(true, "Show selloff and recovery signals", group=burstGroup)
+burstTf = input.timeframe("60", "Momentum timeframe", options=["15", "60"], group=burstGroup)
+burstDepth = input.float(2.0, "Drawdown in weekly ATRs", minval=0.25, step=0.25, group=burstGroup, tooltip="Measured from the close two weeks back using ATR at that close. Price must also break the previous week's low.")
+burstHours = input.int(48, "Hours to watch after a new low", minval=1, maxval=168, group=burstGroup)
+burstAlerts = input.bool(false, "Include intraday events in alert() calls", group=burstGroup)
+string burstName = burstTf == "60" ? "1H" : "15m"
+
+// Calculate the state in the signal timeframe, even when viewing the weekly chart.
+f_burst() =>
+    [reference, volatility, priorLow] = request.security(syminfo.tickerid, "1W", [close[2], ta.atr(atrLength)[2], low[1]], lookahead=barmerge.lookahead_on)
+    [_, _, histogram] = ta.macd(close, 12, 26, 9)
+    bool improving = histogram[1] < 0 and histogram > histogram[1]
+    float threshold = reference - burstDepth * volatility
+    var float weekLow = na
+    bool freshLow = timeframe.change("1W") or na(weekLow) or low < weekLow
+    weekLow := freshLow ? low : weekLow
+    var int phase = 0 // 0 idle, 1 watching, 2 awaiting next close, 3 held
+    var int lowTime = na
+    var float floorPrice = na
+    var float reclaim = na
+    int event = 0
+    if phase != 0 and time_close - lowTime > burstHours * 3600000
+        phase := 0
+    if phase == 0
+        if freshLow and low < priorLow and low <= threshold
+            phase := 1
+            floorPrice := low
+            lowTime := time_close
+            reclaim := na
+            event := 1
+    else if low < floorPrice
+        // An undercut takes priority even if the same candle later rallies.
+        event := phase >= 2 ? -1 : 0
+        phase := 1
+        floorPrice := low
+        lowTime := time_close
+        reclaim := na
+    else if phase == 2
+        bool held = close > reclaim
+        phase := held ? 3 : 1
+        event := held ? 3 : -2
+    else if phase == 1 and improving and close > high[1]
+        phase := 2
+        reclaim := high[1]
+        event := 2
+    [time_close, event, close, floorPrice, reclaim]
+
+f_burstPrevious() =>
+    [ended, event, price, floorPrice, reclaim] = f_burst()
+    [ended[1], event[1], price[1], floorPrice[1], reclaim[1]]
+
+type BurstEvent
+    int ended
+    int code
+    float price
+    float floorPrice
+    float reclaim
+
+f_collectBurst(array<BurstEvent> batch, int ended, int code, float price, float floorPrice, float reclaim) =>
+    if not na(ended) and code != 0
+        batch.push(BurstEvent.new(ended, code, price, floorPrice, reclaim))
+
+f_burstName(int code) =>
+    switch code
+        1 => "Selloff watch"
+        2 => burstName + " turn"
+        3 => burstName + " held"
+        -1 => burstName + " new low"
+        => burstName + " failed hold"
+
+// A live touch is visible immediately. Only a completed signal candle enters history.
+var table burstNote = table.new(position.bottom_left, 1, 1)
+int chartSeconds = timeframe.in_seconds()
+int signalSeconds = timeframe.in_seconds(burstTf)
+bool alignedIntervals = chartSeconds <= signalSeconds or chartSeconds % signalSeconds == 0
+if showBurst
+    [liveEnd, liveCode, livePrice, liveFloor, liveReclaim] = request.security(syminfo.tickerid, burstTf, f_burst(), lookahead=barmerge.lookahead_off)
+    if barstate.islast
+        if not alignedIntervals
+            table.cell(burstNote, 0, 0, "For intraday watch, use a chart interval divisible by " + burstName, text_color=chart.fg_color)
+        else if barstate.isrealtime and liveCode == 1 and liveEnd > timenow
+            table.cell(burstNote, 0, 0, "Selloff watch developing · awaiting " + burstName + " close", text_color=color.orange)
+        else
+            table.clear(burstNote, 0, 0)
+
+array<BurstEvent> burstBatch = array.new<BurstEvent>()
+if showBurst and alignedIntervals
+    if timeframe.in_seconds() > timeframe.in_seconds(burstTf)
+        [ends, codes, prices, lows, reclaims] = request.security_lower_tf(syminfo.tickerid, burstTf, f_burst())
+        for [i, code] in codes
+            int ended = ends.get(i)
+            if barstate.ishistory or ended <= timenow
+                f_collectBurst(burstBatch, ended, code, prices.get(i), lows.get(i), reclaims.get(i))
+    else if timeframe.in_seconds() == timeframe.in_seconds(burstTf)
+        [ended, code, price, floorPrice, reclaim] = f_burst()
+        if barstate.isconfirmed
+            f_collectBurst(burstBatch, ended, code, price, floorPrice, reclaim)
+    else
+        [priorEnd, priorCode, priorPrice, priorFloor, priorReclaim] = request.security(syminfo.tickerid, burstTf, f_burstPrevious(), lookahead=barmerge.lookahead_on)
+        [ended, code, price, floorPrice, reclaim] = request.security(syminfo.tickerid, burstTf, f_burst(), lookahead=barmerge.lookahead_off)
+        var int delivered = na
+        if not na(priorEnd) and (na(delivered) or priorEnd > delivered)
+            f_collectBurst(burstBatch, priorEnd, priorCode, priorPrice, priorFloor, priorReclaim)
+            delivered := priorEnd
+        if barstate.isconfirmed and ended == time_close and (na(delivered) or ended > delivered)
+            f_collectBurst(burstBatch, ended, code, price, floorPrice, reclaim)
+            delivered := ended
+
+// Rebuild the current host bar's label after rollback. Keep one readable marker
+// per chart candle and preserve the exact sequence and execution prices on hover.
+varip int alertFrom = na
+if barstate.isrealtime and na(alertFrom)
+    alertFrom := timenow
+string burstHistory = ""
+for item in burstBatch
+    string title = f_burstName(item.code)
+    string detail = f_time(item.ended) + " " + syminfo.timezone + " | " + title + " @ " + f_price(item.price) + " | low " + f_price(item.floorPrice)
+    if not na(item.reclaim)
+        detail += " | reclaim " + f_price(item.reclaim)
+    burstHistory += (burstHistory == "" ? "" : "\n") + detail
+    if burstAlerts and barstate.isrealtime and item.ended > alertFrom
+        alert(syminfo.tickerid + " | " + detail, alert.freq_all)
+        alertFrom := item.ended
+if burstBatch.size() > 0
+    BurstEvent item = burstBatch.last()
+    color ink = item.code < 0 ? color.maroon : item.code == 1 ? color.orange : item.code == 2 ? color.blue : color.teal
+    string caption = f_burstName(item.code) + (burstBatch.size() > 1 ? " (" + str.tostring(burstBatch.size()) + ")" : "")
+    label.new(item.ended, item.price, caption, xloc=xloc.bar_time, style=label.style_label_upper_left, color=ink, textcolor=color.white, size=labelFontSize, tooltip=burstHistory)
