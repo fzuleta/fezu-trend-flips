@@ -1,8 +1,8 @@
 //@version=6
-indicator("MoneyLine Weekly + Daily Flips", overlay=true, max_labels_count=500)
+indicator("Fezu Trend Flips", overlay=true, max_labels_count=500)
 
 // Independent Supertrend implementation using TradingView's built-in calculation.
-// Weekly calculations on standard time-based charts; no proprietary Bullmania equivalence claimed.
+// Weekly calculations use standard time-based charts.
 atrLength = input.int(10, "ATR length", minval=1)
 factor = input.float(2.5, "ATR factor", minval=0.1, step=0.1)
 twoBars = input.bool(false, "Require 2 consecutive confirmed bars")
@@ -142,7 +142,7 @@ float distance = not na(closedLine) and closedLine != 0 ? 100 * (closedPrice - c
 string distanceText = na(distance) ? "n/a" : str.tostring(distance, "+#.##;-#.##") + "%"
 var table dashboard = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 15), border_width=1)
 if barstate.islast and showDashboard
-    table.cell(dashboard, 0, 0, "MoneyLine v2", text_color=color.white)
+    table.cell(dashboard, 0, 0, "Fezu Trend Flips", text_color=color.white)
     table.cell(dashboard, 1, 0, "1W | ATR " + str.tostring(atrLength) + " x " + str.tostring(factor), text_color=color.white)
     table.cell(dashboard, 0, 1, "Market state", text_color=color.white)
     table.cell(dashboard, 1, 1, stateText, text_color=stateColor)

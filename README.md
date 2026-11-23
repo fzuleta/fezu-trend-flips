@@ -1,10 +1,10 @@
-# MoneyLine Weekly + Daily Flips
+# Fezu Trend Flips
 
 A Pine Script v6 overlay for TradingView. It plots a confirmed weekly Supertrend and marks daily trend changes. A separate hourly model tracks rebounds after deep selloffs, so a BUY rebound can appear while the weekly trend is still bearish.
 
 ## Use on a chart
 
-1. Open [MoneyLine-Weekly-Daily-Flips.pine](MoneyLine-Weekly-Daily-Flips.pine) and copy the entire file.
+1. Open [Fezu-Trend-Flips.pine](Fezu-Trend-Flips.pine) and copy the entire file.
 2. In TradingView's Pine Editor, create a new indicator, replace its contents, save it, and select **Add to chart**.
 3. Choose standard time-based candles on an intraday, 1D, or 1W chart. The weekly model defaults to ATR length 10 and factor 2.5. Enable **Require 2 consecutive confirmed bars** if you want a second weekly close to confirm a change.
 
@@ -28,4 +28,4 @@ Historical signals and hypothetical comparisons do not guarantee future results.
 
 The software is provided as is, without warranty of accuracy, availability, fitness for a particular purpose, or profitability. To the extent permitted by applicable law, the authors disclaim liability for losses arising from its use.
 
-This is an independent indicator built with TradingView's Supertrend function. TradingView and Bullmania do not sponsor or endorse this project. It makes no claim to reproduce a proprietary MoneyLine formula.
+This is an independent indicator built with TradingView's Supertrend function. TradingView and Bullmania do not sponsor or endorse this project. Fezu Trend Flips uses its own signal rules.
