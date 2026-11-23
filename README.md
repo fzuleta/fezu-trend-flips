@@ -27,6 +27,7 @@ The daily chart zooms in on the November selloff. **BUY rebound** marks the day 
 | Chart marking | What it means |
 | --- | --- |
 | Green or magenta weekly line | The last accepted weekly trend is bullish or bearish, respectively. With two-bar confirmation enabled, orange marks a pending change. |
+| Green or magenta shading | Fills the area between each chart candle’s close and the confirmed weekly line. **Trend fill opacity (%)** defaults to 20. Set it to 0 to hide the fill. Pending weekly changes leave a gap. |
 | D Bull / D Bear | The daily trend flipped at a confirmed daily close. |
 | Developing weekly flip | A preview based on the open week. It can disappear before the weekly close. |
 | Selloff and recovery markers | A 15-minute or hourly momentum watch after a deep drawdown. The default interval is one hour. |
