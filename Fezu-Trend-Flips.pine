@@ -470,7 +470,7 @@ if not na(latestTrade)
     string caption = (buy ? "BUY rebound" : "SELL rebound") + (signalsOnBar > 1 ? " (" + str.tostring(signalsOnBar) + ")" : "")
     label.new(bar_index, latestTrade.price, caption, yloc=buy ? yloc.belowbar : yloc.abovebar, style=buy ? label.style_label_up : label.style_label_down, color=buy ? color.rgb(19, 114, 77) : color.rgb(168, 50, 59), textcolor=color.white, size=labelFontSize, tooltip=tradeHistory)
 
-trendFillOpacity = input.int(20, "Trend fill opacity (%)", minval=0, maxval=100, tooltip="Shades the space between the confirmed weekly line and each candle's close. Set to 0 to hide.")
+trendFillOpacity = input.int(7, "Trend fill opacity (%)", minval=0, maxval=100, tooltip="Shades the space between the confirmed weekly line and each candle's close. Set to 0 to hide.")
 pricePlot = plot(close, "Trend fill price", display=display.none, editable=false)
 fill(bullLinePlot, pricePlot, color.new(color.lime, 100 - trendFillOpacity), "Bullish trend fill", fillgaps=false)
 fill(bearLinePlot, pricePlot, color.new(color.fuchsia, 100 - trendFillOpacity), "Bearish trend fill", fillgaps=false)
