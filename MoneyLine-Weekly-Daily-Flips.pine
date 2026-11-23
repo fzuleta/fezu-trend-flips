@@ -6,7 +6,7 @@ indicator("MoneyLine Weekly + Daily Flips", overlay=true, max_labels_count=500)
 atrLength = input.int(10, "ATR length", minval=1)
 factor = input.float(2.5, "ATR factor", minval=0.1, step=0.1)
 twoBars = input.bool(false, "Require 2 consecutive confirmed bars")
-labelFontSize = input.int(7, "Bull / bear font size", minval=5, maxval=16)
+labelFontSize = input.int(9, "Chart label font size", minval=5, maxval=16)
 showDaily = input.bool(true, "Show daily flip flags")
 showMonthly = input.bool(false, "Show confirmed monthly Supertrend")
 showLabels = input.bool(true, "Show weekly flip markers")
@@ -240,7 +240,7 @@ burstAlerts = input.bool(false, "Include intraday events in alert() calls", grou
 string burstName = burstTf == "60" ? "1H" : "15m"
 
 // Calculate the state in the signal timeframe, even when viewing the weekly chart.
-f_burst() =>
+f_burstCore() =>
     [reference, volatility, priorLow] = request.security(syminfo.tickerid, "1W", [close[2], ta.atr(atrLength)[2], low[1]], lookahead=barmerge.lookahead_on)
     [_, _, histogram] = ta.macd(close, 12, 26, 9)
     bool improving = histogram[1] < 0 and histogram > histogram[1]
@@ -277,7 +277,11 @@ f_burst() =>
         phase := 2
         reclaim := high[1]
         event := 2
-    [time_close, event, close, floorPrice, reclaim]
+    [time_close, event, close, floorPrice, reclaim, phase]
+
+f_burst() =>
+    [ended, event, price, floorPrice, reclaim, phase] = f_burstCore()
+    [ended, event, price, floorPrice, reclaim]
 
 f_burstPrevious() =>
     [ended, event, price, floorPrice, reclaim] = f_burst()
@@ -360,3 +364,108 @@ if burstBatch.size() > 0
     color ink = item.code < 0 ? color.maroon : item.code == 1 ? color.orange : item.code == 2 ? color.blue : color.teal
     string caption = f_burstName(item.code) + (burstBatch.size() > 1 ? " (" + str.tostring(burstBatch.size()) + ")" : "")
     label.new(item.ended, item.price, caption, xloc=xloc.bar_time, style=label.style_label_upper_left, color=ink, textcolor=color.white, size=labelFontSize, tooltip=burstHistory)
+
+// Paired hourly rebound trades are independent of the optional 15-minute watch.
+showTrades = input.bool(true, "Show hourly BUY / SELL rebound", group="Rebound trades")
+tradeAlerts = input.bool(false, "Include hourly BUY / SELL in alert() calls", group="Rebound trades")
+
+f_reboundTrade(int phase, int event, float floorPrice, bool breakout) =>
+    var float turnHigh = na
+    var float stop = na
+    var int entryBar = na
+    float pivot = ta.pivotlow(low, 2, 2)
+    int side = 0
+    float trigger = na
+    if not na(entryBar)
+        if bar_index - 2 > entryBar and not na(pivot)
+            stop := math.max(stop, pivot)
+        if close < stop
+            side := -1
+            trigger := stop
+            entryBar := na
+            stop := na
+    else
+        if event == 2
+            turnHigh := high
+        else if phase != 2 and phase != 3
+            turnHigh := na
+        // Give the hold its own completed candle before accepting a breakout.
+        bool buy = breakout ? phase == 3 and event != 3 and close > turnHigh : event == 3
+        if buy
+            side := 1
+            trigger := breakout ? turnHigh : floorPrice
+            entryBar := bar_index
+            stop := floorPrice
+            turnHigh := na
+    [side, trigger]
+
+f_hourlyTrade(int offset) =>
+    [ended, event, price, floorPrice, reclaim, phase] = f_burstCore()
+    [side, level] = f_reboundTrade(phase, event, floorPrice, true)
+    [ended[offset], side[offset], price[offset], level[offset], floorPrice[offset]]
+
+type ReboundSignal
+    int ended
+    int side
+    float price
+    float floorPrice
+    float level
+
+f_collectTrade(array<ReboundSignal> batch, int ended, int side, float price, float floorPrice, float level) =>
+    if not na(ended) and side != 0
+        batch.push(ReboundSignal.new(ended, side, price, floorPrice, level))
+
+array<ReboundSignal> trades = array.new<ReboundSignal>()
+if showTrades or tradeAlerts
+    if chartSeconds > 3600
+        if chartSeconds % 3600 == 0
+            [ends, sides, prices, levels, floors] = request.security_lower_tf(syminfo.tickerid, "60", f_hourlyTrade(0))
+            for [i, side] in sides
+                if side != 0 and (barstate.ishistory or ends.get(i) <= timenow)
+                    f_collectTrade(trades, ends.get(i), side, prices.get(i), floors.get(i), levels.get(i))
+        else if barstate.islast
+            table.cell(burstNote, 0, 0, "Hourly rebound trades need a chart interval divisible by 1H", text_color=chart.fg_color)
+    else if chartSeconds == 3600
+        [ended, side, price, level, floorPrice] = f_hourlyTrade(0)
+        if barstate.isconfirmed
+            f_collectTrade(trades, ended, side, price, floorPrice, level)
+    else
+        [priorEnd, priorSide, priorPrice, priorLevel, priorFloor] = request.security(syminfo.tickerid, "60", f_hourlyTrade(1), lookahead=barmerge.lookahead_on)
+        [ended, side, price, level, floorPrice] = request.security(syminfo.tickerid, "60", f_hourlyTrade(0), lookahead=barmerge.lookahead_off)
+        var int delivered = na
+        if not na(priorEnd) and (na(delivered) or priorEnd > delivered)
+            f_collectTrade(trades, priorEnd, priorSide, priorPrice, priorFloor, priorLevel)
+            delivered := priorEnd
+        if barstate.isconfirmed and ended == time_close and (na(delivered) or ended > delivered)
+            f_collectTrade(trades, ended, side, price, floorPrice, level)
+            delivered := ended
+
+var bool visibleEntry = false
+varip int tradeAlertFrom = na
+if barstate.isrealtime and na(tradeAlertFrom)
+    tradeAlertFrom := timenow
+string tradeHistory = ""
+ReboundSignal latestTrade = na
+int signalsOnBar = 0
+for item in trades
+    bool buy = item.side == 1
+    // The oldest available intrabar can start in the middle of a trade.
+    if buy != visibleEntry
+        visibleEntry := buy
+        string title = buy ? "BUY rebound" : "SELL rebound"
+        string tip = title + " · confirmed 1H close " + f_price(item.price) + "\n" + f_time(item.ended) + " " + syminfo.timezone
+        tip += buy ? "\nTurn high " + f_price(item.level) + " | initial exit level " + f_price(item.floorPrice) : "\nClosed below trailing exit level " + f_price(item.level)
+        if showTrades
+            tradeHistory += (signalsOnBar == 0 ? "" : "\n\n") + tip
+            latestTrade := item
+            signalsOnBar += 1
+        if tradeAlerts and barstate.isrealtime and item.ended > tradeAlertFrom
+            alert(syminfo.tickerid + " | " + tip, alert.freq_all)
+            tradeAlertFrom := item.ended
+
+// A weekly candle can contain several entries and exits. Keep the latest side
+// visible outside the candle and list all the hourly signals in time order.
+if not na(latestTrade)
+    bool buy = latestTrade.side == 1
+    string caption = (buy ? "BUY rebound" : "SELL rebound") + (signalsOnBar > 1 ? " (" + str.tostring(signalsOnBar) + ")" : "")
+    label.new(bar_index, latestTrade.price, caption, yloc=buy ? yloc.belowbar : yloc.abovebar, style=buy ? label.style_label_up : label.style_label_down, color=buy ? color.rgb(19, 114, 77) : color.rgb(168, 50, 59), textcolor=color.white, size=labelFontSize, tooltip=tradeHistory)
