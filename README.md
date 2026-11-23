@@ -42,4 +42,4 @@ Historical signals and hypothetical comparisons do not guarantee future results.
 
 The software is provided as is, without warranty of accuracy, availability, fitness for a particular purpose, or profitability. To the extent permitted by applicable law, the authors disclaim liability for losses arising from its use.
 
-This is an independent indicator built with TradingView's Supertrend function. TradingView and Bullmania do not sponsor or endorse this project. Fezu Trend Flips uses its own signal rules.
+Fezu Trend Flips is independently developed and has no third-party sponsorship or endorsement.
