@@ -8,6 +8,20 @@ A Pine Script v6 overlay for TradingView. It plots a confirmed weekly Supertrend
 2. In TradingView's Pine Editor, create a new indicator, replace its contents, save it, and select **Add to chart**.
 3. Choose standard time-based candles on an intraday, 1D, or 1W chart. The weekly model defaults to ATR length 10 and factor 2.5. Enable **Require 2 consecutive confirmed bars** if you want a second weekly close to confirm a change.
 
+## Chart examples
+
+### Weekly trend and daily flips
+
+On this SOL/USDT weekly chart, the green **bull** label in August marks a confirmed weekly reversal. In October, **D bear** appears while the weekly line is still green. The magenta **bear** label and line follow when the weekly trend also turns bearish.
+
+![SOL/USDT weekly candles with an August bull flip, an October D bear flag, and a later magenta weekly bear flip](docs/screenshots/solusdt-weekly-flips.png)
+
+### Hourly rebound on daily candles
+
+The daily chart zooms in on the November selloff. **BUY rebound** marks the day an hourly entry triggered, and **SELL rebound** marks the following exit. The weekly line stays magenta above price through both events. Hover over a rebound label in TradingView to see the hourly close price and time.
+
+![SOL/USDT daily candles showing a green BUY rebound and a red SELL rebound beneath the magenta weekly trend line](docs/screenshots/solusdt-daily-rebound.png)
+
 ## Reading the signals
 
 | Chart marking | What it means |
